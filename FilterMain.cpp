@@ -3,20 +3,21 @@
 #include <iostream>
 #include <fstream>
 #include <stdlib.h>
-#include "Filter.h"
+#include <cstring>
 
+
+#include "Filter.h"
+#include "rdtsc.h"
 using namespace std;
 
-#include "rdtsc.h"
+#define USE_SSE
+#define USE_DIV
 
-//
-// Forward declare the functions
-//
-Filter * readFilter(string filename);
+
+Filter *readFilter(string filename);
 double applyFilter(Filter *filter, cs1300bmp *input, cs1300bmp *output);
 
-int
-main(int argc, char **argv)
+int main(int argc, char **argv)
 {
 
   if ( argc < 2) {
@@ -99,39 +100,82 @@ applyFilter(class Filter *filter, cs1300bmp *input, cs1300bmp *output)
   long long cycStart, cycStop;
 
   cycStart = rdtscll();
+    //create values for frequent pointer values to decrease time by taking pointer calls out of each loop
+  int filterSize=filter->getSize();
+  int Fdivisor=filter->getDivisor();
+  int input_width = input -> width;
+  int input_height = input -> height;
+  
+  output->width= input_width;
+  output->height=input_height;
+  //unrolled loop 4 times to get 4 more values per iteration to optimize processing speed by 4. Tried using SSE and SSE2 however was a bit confused on the operations, need more time to learn. I used SIMD as an inspiration for my design, pushing 4 through each loop.
+      for(int plane=0; plane<3;plane++){
+       for(int row = 1; row < (input_height) - 4; row+=4) {
 
-  output -> width = input -> width;
-  output -> height = input -> height;
+         for(int col = 1; col < (input_width) - 4 ; col+=4) {
+             
+    //4 base values for the four values being changed, will be used to decrease amount of pointer calls and constant change of ouput color value
+    int v=0;
+    int v1=0;
+    int v2=0;
+    int v3=0;
+    
 
 
-  for(int col = 1; col < (input -> width) - 1; col = col + 1) {
-    for(int row = 1; row < (input -> height) - 1 ; row = row + 1) {
-      for(int plane = 0; plane < 3; plane++) {
-
-	output -> color[plane][row][col] = 0;
-
-	for (int j = 0; j < filter -> getSize(); j++) {
-	  for (int i = 0; i < filter -> getSize(); i++) {	
-	    output -> color[plane][row][col]
-	      = output -> color[plane][row][col]
-	      + (input -> color[plane][row + i - 1][col + j - 1] 
-		 * filter -> get(i, j) );
+	for (int j = 0; j < filterSize-3; j+=4) {
+	  for (int i = 0; i < filterSize-3; i+=4) {	
+	    v+=input -> color[plane][row + i - 1][col + j - 1] * filter -> get(i, j);
+        v1+=input ->color[plane][row + i][col + j] * filter -> get(i+1,j+1); 
+        v2+=input ->color[plane][row + i + 1][col + j + 1] * filter -> get(i+2,j+2); 
+        v3+=input ->color[plane][row + i + 2][col + j + 2] * filter -> get(i+3,j+4); 
+        
+          
+     
 	  }
 	}
-	
-	output -> color[plane][row][col] = 	
-	  output -> color[plane][row][col] / filter -> getDivisor();
+	//here I am using the if statements to assure each value is between 0-255 then implement values to color array. 'else if' will also help speed
+	v=v/Fdivisor;
 
-	if ( output -> color[plane][row][col]  < 0 ) {
-	  output -> color[plane][row][col] = 0;
-	}
-
-	if ( output -> color[plane][row][col]  > 255 ) { 
-	  output -> color[plane][row][col] = 255;
-	}
+	if (v<0){
+        v=0;
+    }
+    else if(v>255){
+        v=255;
+    }
+    output->color[plane][row][col]=v;
+             
+    v1=v1/Fdivisor;
+    if(v1<0){
+        v1=0;
+    }
+    else if(v1>255){
+        v1=255;
+    }
+     output->color[plane][row+1][col+1]=v1;        
+     
+     v2=v2/Fdivisor;
+    if(v2<0){
+        v2=0;
+    }
+    else if(v2>255){
+        v2=255;
+    }
+     output->color[plane][row+2][col+2]=v2; 
+      
+     v3=v3/Fdivisor;
+    if(v3<0){
+        v3=0;
+    }
+    else if(v3>255){
+        v3=255;
+    }
+     output->color[plane][row+3][col+3]=v3; 
+             
+             
+         }
       }
     }
-  }
+
 
   cycStop = rdtscll();
   double diff = cycStop - cycStart;
@@ -140,3 +184,4 @@ applyFilter(class Filter *filter, cs1300bmp *input, cs1300bmp *output)
 	  diff, diff / (output -> width * output -> height));
   return diffPerPixel;
 }
+
